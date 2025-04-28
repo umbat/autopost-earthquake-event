@@ -1,91 +1,123 @@
 import os
+import threading
 import tkinter as tk
 from tkinter import filedialog, messagebox
+from tkinter import ttk
 from PIL import ImageTk, Image
 import requests
-import tweepy
+from requests_oauthlib import OAuth1
 from dotenv import load_dotenv
+import time
 
+# Load API keys
 load_dotenv()
-
-# === Load API credentials ===
 FB_PAGE_ID = os.getenv("FB_PAGE_ID")
-FB_TOKEN = os.getenv("FB_ACCESS_TOKEN")
-IG_USER_ID = os.getenv("IG_USER_ID")
-IG_TOKEN = os.getenv("IG_ACCESS_TOKEN")
+FB_TOKEN = os.getenv("FB_PAGE_ACCESS_TOKEN")
 X_API_KEY = os.getenv("X_API_KEY")
-X_API_SECRET = os.getenv("X_API_SECRET")
+X_API_SECRET = os.getenv("X_API_SECRET_KEY")
 X_ACCESS_TOKEN = os.getenv("X_ACCESS_TOKEN")
-X_ACCESS_SECRET = os.getenv("X_ACCESS_SECRET")
-IMGUR_CLIENT_ID = os.getenv("IMGUR_CLIENT_ID")
+X_ACCESS_SECRET = os.getenv("X_ACCESS_TOKEN_SECRET")
 
-# === Upload image to Imgur ===
-def upload_to_imgur(image_path, client_id):
-    headers = {'Authorization': f'Client-ID {client_id}'}
-    with open(image_path, 'rb') as img:
-        response = requests.post("https://api.imgur.com/3/upload", headers=headers, files={"image": img})
-    return response.json()["data"]["link"]
+# Facebook Upload
+def post_image_to_facebook(image_path, caption, retries=3):
+    url = f"https://graph.facebook.com/v18.0/{FB_PAGE_ID}/photos"
+    for attempt in range(retries):
+        try:
+            with open(image_path, 'rb') as img:
+                files = {'source': img}
+                payload = {'caption': caption, 'access_token': FB_TOKEN}
+                response = requests.post(url, data=payload, files=files)
+            if response.status_code == 200:
+                return response.json()
+            else:
+                raise Exception(f"Facebook error {response.status_code}: {response.text}")
+        except Exception as e:
+            if attempt == retries - 1:
+                raise e
+            time.sleep(2)  # wait before retry
 
-# === Facebook image post ===
-def post_image_to_facebook(image_path, message):
-    url = f"https://graph.facebook.com/{FB_PAGE_ID}/photos"
-    with open(image_path, 'rb') as img:
-        files = {'source': img}
-        payload = {'caption': message, 'access_token': FB_TOKEN}
-        response = requests.post(url, data=payload, files=files)
-    return response.json()
+# Twitter (X) Upload
+def upload_image_to_x(image_path, retries=3):
+    auth = OAuth1(X_API_KEY, X_API_SECRET, X_ACCESS_TOKEN, X_ACCESS_SECRET)
+    upload_url = 'https://upload.twitter.com/1.1/media/upload.json'
+    for attempt in range(retries):
+        try:
+            with open(image_path, 'rb') as file:
+                files = {'media': file}
+                response = requests.post(upload_url, auth=auth, files=files)
+            if response.status_code == 200:
+                return response.json()['media_id_string']
+            else:
+                raise Exception(f"X upload error {response.status_code}: {response.text}")
+        except Exception as e:
+            if attempt == retries - 1:
+                raise e
+            time.sleep(2)
 
-# === Instagram post (via hosted image URL) ===
-def post_to_instagram(image_url, caption):
-    create_url = f"https://graph.facebook.com/v19.0/{IG_USER_ID}/media"
-    publish_url = "https://graph.facebook.com/v19.0/{}/"
+def post_tweet(caption, media_id, retries=3):
+    auth = OAuth1(X_API_KEY, X_API_SECRET, X_ACCESS_TOKEN, X_ACCESS_SECRET)
+    url = 'https://api.twitter.com/2/tweets'
+    payload = {
+        "text": caption,
+        "media": {
+            "media_ids": [media_id]
+        }
+    }
+    for attempt in range(retries):
+        try:
+            response = requests.post(url, auth=auth, json=payload)
+            if response.status_code in (200, 201):
+                return True
+            else:
+                raise Exception(f"X tweet error {response.status_code}: {response.text}")
+        except Exception as e:
+            if attempt == retries - 1:
+                raise e
+            time.sleep(2)
 
-    media_res = requests.post(create_url, data={
-        "image_url": image_url,
-        "caption": caption,
-        "access_token": IG_TOKEN
-    })
-    creation_id = media_res.json().get("id")
-    if not creation_id:
-        return media_res.json()
+# Compress Image Helper
+def compress_image(image_path, output_path):
+    img = Image.open(image_path)
+    img = img.convert('RGB')
+    img.save(output_path, 'JPEG', optimize=True, quality=85)
 
-    publish_res = requests.post(publish_url.format(creation_id), data={"access_token": IG_TOKEN})
-    return publish_res.json()
-
-# === X (Twitter) post ===
-def post_image_to_x(image_path, message):
-    auth = tweepy.OAuth1UserHandler(X_API_KEY, X_API_SECRET, X_ACCESS_TOKEN, X_ACCESS_SECRET)
-    api = tweepy.API(auth)
-    media = api.media_upload(image_path)
-    tweet = api.update_status(status=message, media_ids=[media.media_id])
-    return tweet.id
-
-# === GUI App ===
+# GUI App
 class SocialPosterApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Earthquake Auto Poster")
-        self.root.geometry("500x600")
+        self.root.title("Earthquake Auto Poster 🌎 (Next Level)")
+        self.root.geometry("600x800")
+        self.root.configure(padx=20, pady=20)
 
         self.image_path = ""
 
-        self.text_label = tk.Label(root, text="Enter Caption/Text:")
-        self.text_label.pack()
+        self.title_label = tk.Label(root, text="AutoPost Earthquake Data", font=("Helvetica", 18, "bold"))
+        self.title_label.pack(pady=10)
 
-        self.text_input = tk.Text(root, height=5)
-        self.text_input.pack(pady=5)
+        self.text_label = tk.Label(root, text="Caption/Text:", font=("Helvetica", 14))
+        self.text_label.pack(anchor="w")
 
-        self.image_button = tk.Button(root, text="Choose Image", command=self.select_image)
-        self.image_button.pack()
+        self.text_input = tk.Text(root, height=6, font=("Helvetica", 12))
+        self.text_input.pack(fill="x", pady=5)
+
+        self.image_button = ttk.Button(root, text="Choose Image 📷", command=self.select_image)
+        self.image_button.pack(pady=10)
 
         self.image_preview = tk.Label(root)
-        self.image_preview.pack(pady=5)
+        self.image_preview.pack(pady=10)
 
-        self.post_button = tk.Button(root, text="Post to All Platforms", command=self.post_to_all)
-        self.post_button.pack(pady=10)
+        self.post_button = ttk.Button(root, text="Post to Facebook and X 🚀", command=self.start_posting)
+        self.post_button.pack(pady=20)
+
+        self.progress = ttk.Progressbar(root, orient="horizontal", length=400, mode="determinate")
+        self.progress.pack(pady=10)
+        self.progress["maximum"] = 2
+
+        self.status_label = tk.Label(root, text="", font=("Helvetica", 14))
+        self.status_label.pack(pady=10)
 
     def select_image(self):
-        file_path = filedialog.askopenfilename(filetypes=[("Image files", "*.png *.jpg *.jpeg")])
+        file_path = filedialog.askopenfilename(filetypes=[("Image files", "*.png *.jpg *.jpeg *.gif")])
         if file_path:
             self.image_path = file_path
             img = Image.open(file_path)
@@ -94,34 +126,83 @@ class SocialPosterApp:
             self.image_preview.configure(image=img)
             self.image_preview.image = img
 
-    def post_to_all(self):
+    def start_posting(self):
         if not self.image_path:
             messagebox.showerror("Error", "Please select an image")
             return
-        text = self.text_input.get("1.0", tk.END).strip()
-        if not text:
+        caption = self.text_input.get("1.0", tk.END).strip()
+        if not caption:
             messagebox.showerror("Error", "Please enter a caption")
             return
 
+        self.post_button.config(state="disabled")
+        self.progress["value"] = 0
+        self.status_label.config(text="Posting...")
+
+        threading.Thread(target=self.post_to_platforms, args=(caption,)).start()
+
+    def post_to_platforms(self, caption):
+        errors = []
+
+        compressed_path = "temp_compressed.jpg"
+        compress_image(self.image_path, compressed_path)
+
+        threads = []
+        results = {"facebook": None, "x": None}
+
+        t1 = threading.Thread(target=self.post_facebook, args=(self.image_path, caption, errors, results))
+        t2 = threading.Thread(target=self.post_x, args=(compressed_path, caption, errors, results))
+
+        threads.append(t1)
+        threads.append(t2)
+
+        t1.start()
+        t2.start()
+
+        for t in threads:
+            t.join()
+
+        if os.path.exists(compressed_path):
+            os.remove(compressed_path)
+
+        self.root.after(0, self.finish_posting, errors, results)
+
+    def post_facebook(self, image_path, caption, errors, results):
         try:
-            # Upload image to Imgur
-            image_url = upload_to_imgur(self.image_path, IMGUR_CLIENT_ID)
-
-            # Post to Facebook
-            fb_res = post_image_to_facebook(self.image_path, text)
-
-            # Post to Instagram
-            insta_res = post_to_instagram(image_url, text)
-
-            # Post to X
-            x_res = post_image_to_x(self.image_path, text)
-
-            messagebox.showinfo("Success", "Posted successfully to all platforms!")
+            post_image_to_facebook(image_path, caption)
+            results["facebook"] = "Success"
         except Exception as e:
-            messagebox.showerror("Post Failed", str(e))
+            errors.append(f"Facebook Error: {e}")
+            results["facebook"] = "Failed"
+        finally:
+            self.root.after(0, self.update_progress)
 
+    def post_x(self, compressed_path, caption, errors, results):
+        try:
+            media_id = upload_image_to_x(compressed_path)
+            post_tweet(caption, media_id)
+            results["x"] = "Success"
+        except Exception as e:
+            errors.append(f"X Error: {e}")
+            results["x"] = "Failed"
+        finally:
+            self.root.after(0, self.update_progress)
 
-if __name__ == '__main__':
+    def update_progress(self):
+        self.progress["value"] += 1
+
+    def finish_posting(self, errors, results):
+        self.post_button.config(state="normal")
+        if errors:
+            summary = "\n".join(errors)
+            messagebox.showerror("Post Result", f"Errors occurred:\n{summary}")
+        else:
+            messagebox.showinfo("Success", "✅ Successfully posted to Facebook and X!")
+
+        self.status_label.config(text=f"Facebook: {results['facebook']} | X: {results['x']}")
+
+if __name__ == "__main__":
     root = tk.Tk()
     app = SocialPosterApp(root)
     root.mainloop()
+ 
