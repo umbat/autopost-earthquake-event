@@ -1,6 +1,37 @@
+# Node.js
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Build output
+dist/
+build/
+*.log
+
+# dotenv environment files
 .env
+*.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.pyc
+
+# VSCode
+.vscode/
+
+# Mac system files
+.DS_Store
+
+# OS generated files
+Thumbs.db
+
+# Test scripts (if you don't want to track them)
 test.py
 testfb.py
 testig.py
 testx.py
-newautopost.py.env
+newautopost.py
